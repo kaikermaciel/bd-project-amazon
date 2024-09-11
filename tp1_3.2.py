@@ -159,10 +159,14 @@ def file_transcribe(input_file):
                 print(f"Processando SIMILAR: {similar_items}")
             elif current_section == 'CATEGORIES':
                 # Processa categorias separadas por '|'
-                categories = stripped_line.split('|')[1:]
+                categories = stripped_line.split('|')[1:]  # Pega as categorias a partir do índice 1
                 for category in categories:
-                    current_product.add_category(category)
+                    if category not in current_product.categories:  # Verifica se a categoria já está presente
+                        current_product.add_category(category)  # Adiciona apenas se não for duplicada
+                    else:
+                        print(f"Categoria duplicada ignorada: {category}")
                 print(f"Processando CATEGORIES: {categories}")
+
             # Continua processando até encontrar uma linha em branco ou outro identificador
             if current_section and not any(k in stripped_line for k in file_identifiers):
                 if current_section == 'REVIEWS':
