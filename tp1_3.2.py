@@ -10,6 +10,7 @@ file_identifiers = {
     'reviews' : 'REVIEWS',
     'discontinued product' : 'CABOU'
 }
+
 class Produto:
     def __init__(self):
         self.id = 0
@@ -18,7 +19,7 @@ class Produto:
         self.group = ''
         self.salesrank = ''
         self.similar = []
-        self.categories = []
+        self.categories = []  # Agora armazena instâncias de Category
         self.total_review = 0
         self.averageRating_review = 0
         self.comments = []  # Armazena instâncias da classe Comment
@@ -62,10 +63,50 @@ class Produto:
                 f"Grupo: {self.group}\n"
                 f"Salesrank: {self.salesrank}\n"
                 f"Similares: {', '.join(self.similar)}\n"
-                f"Categorias: {', '.join(self.categories)}\n"
+                f"Categorias:\n" + '\n'.join([str(category) for category in self.categories]) + '\n'
                 f"Total de Reviews: {self.total_review}\n"
                 f"Rating Médio: {self.averageRating_review}\n"
-                f"Comentários:\n" + '\n'.join([str(comment) for comment in self.comments])+'\n')
+                f"Comentários:\n" + '\n'.join([str(comment) for comment in self.comments]) + '\n')
+
+
+class Category:
+    def __init__(self):
+        self.category_name = ''
+        self.category_id = 0
+        self.subcategories = []  # Armazena instâncias de Subcategory
+
+    def set_category_name(self, category_name):
+        self.category_name = category_name
+
+    def set_category_id(self, category_id):
+        self.category_id = category_id
+
+    def add_subcategory(self, subcategory):
+        self.subcategories.append(subcategory)
+
+    def __str__(self):
+        return (f"Categoria: {self.category_name} (ID: {self.category_id})\n"
+                f"Subcategorias:\n" + '\n'.join([str(subcategory) for subcategory in self.subcategories]) + '\n')
+
+
+class Subcategory:
+    def __init__(self):
+        self.subcategory_name = ''
+        self.subcategory_id = 0
+        self.category_id_associated = 0
+
+    def set_subcategory_name(self, subcategory_name):
+        self.subcategory_name = subcategory_name
+
+    def set_subcategory_id(self, subcategory_id):
+        self.subcategory_id = subcategory_id
+
+    def set_category_id_associated(self, category_id_associated):
+        self.category_id_associated = category_id_associated
+
+    def __str__(self):
+        return f"Subcategoria: {self.subcategory_name} (ID: {self.subcategory_id})"
+
 
 class Comment:
     def __init__(self):
@@ -159,13 +200,35 @@ def file_transcribe(input_file):
                 print(f"Processando SIMILAR: {similar_items}")
             elif current_section == 'CATEGORIES':
                 # Processa categorias separadas por '|'
-                categories = stripped_line.split('|')[1:]  # Pega as categorias a partir do índice 1
+                categories = stripped_line.split('|')[1:]  # Pega as categorias e subcategorias
                 for category in categories:
-                    if category not in current_product.categories:  # Verifica se a categoria já está presente
-                        current_product.add_category(category)  # Adiciona apenas se não for duplicada
+                    parts = category.split('[')
+                    category_name = parts[0].strip()
+                    category_id = int(parts[1].strip(']'))
+
+                    # Verifica se já existe uma instância de Category com esse nome
+                    existing_category = next((cat for cat in current_product.categories if cat.category_name == category_name), None)
+                    if not existing_category:
+                        new_category = Category()
+                        new_category.set_category_name(category_name)
+                        new_category.set_category_id(category_id)
+                        current_product.add_category(new_category)
+                        print(f"Categoria adicionada: {category_name}")
                     else:
-                        print(f"Categoria duplicada ignorada: {category}")
-                print(f"Processando CATEGORIES: {categories}")
+                        print(f"Categoria duplicada ignorada: {category_name}")
+
+                    # Processando subcategorias
+                    if len(parts) > 2:  # Caso existam subcategorias
+                        subcategory_name = parts[2].strip()
+                        subcategory_id = int(parts[3].strip(']'))
+
+                        new_subcategory = Subcategory()
+                        new_subcategory.set_subcategory_name(subcategory_name)
+                        new_subcategory.set_subcategory_id(subcategory_id)
+                        new_subcategory.set_category_id_associated(category_id)
+
+                        existing_category.add_subcategory(new_subcategory)
+                        print(f"Subcategoria adicionada: {subcategory_name}")
 
             # Continua processando até encontrar uma linha em branco ou outro identificador
             if current_section and not any(k in stripped_line for k in file_identifiers):
@@ -197,4 +260,3 @@ produtos = file_transcribe("teste.txt")
 # Imprime o estado de cada produto após processamento
 for produto in produtos:
     print(produto)
-
