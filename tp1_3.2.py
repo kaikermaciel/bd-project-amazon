@@ -1,3 +1,8 @@
+import time
+import psycopg2
+import re
+
+
 # Dicionário com identificadores
 file_identifiers = {
     'Id:' : 'ID',
@@ -21,7 +26,7 @@ class Produto:
         self.similar = []
         self.categories = []  # Agora armazena instâncias de Category
         self.total_review = 0
-        self.averageRating_review = 0
+        self.average_rating = 0
         self.comments = []  # Armazena instâncias da classe Comment
 
     # Setters
@@ -52,8 +57,8 @@ class Produto:
     def set_total_review(self, total_review):
         self.total_review = total_review
 
-    def set_averageRating_review(self, averageRating_review):
-        self.averageRating_review = averageRating_review
+    def set_average_rating(self, average_rating):
+        self.average_rating = average_rating
 
     # Método para imprimir o estado atual do produto
     def __str__(self):
@@ -65,7 +70,7 @@ class Produto:
                 f"Similares: {', '.join(self.similar)}\n"
                 f"Categorias:\n" + '\n'.join([str(category) for category in self.categories]) + '\n'
                 f"Total de Reviews: {self.total_review}\n"
-                f"Rating Médio: {self.averageRating_review}\n"
+                f"Rating Médio: {self.average_rating}\n"
                 f"Comentários:\n" + '\n'.join([str(comment) for comment in self.comments]) + '\n')
 
 
@@ -105,7 +110,7 @@ class Subcategory:
         self.category_id_associated = category_id_associated
 
     def __str__(self):
-        return f"Subcategoria: {self.subcategory_name} (ID: {self.subcategory_id})"
+        return f"Subcategoria: {self.subcategory_name} (ID: {self.subcategory_id}) Category Associated: {self.category_id_associated}"
 
 
 class Comment:
@@ -139,124 +144,333 @@ class Comment:
                 f'Ajudas: {self.helpful_comment}')
 
 
-# Função para transcrever arquivo
-def file_transcribe(input_file):
-    current_section = None
-    products = []
-    current_product = None
 
-    with open(input_file) as file:
+# Função atualizada para transcrição do arquivo e verificação de subcategorias
+def file_transcribe_with_regex(input_file):
+    # Regex patterns
+    patterns = {
+        'ID': re.compile(r'Id:\s*(\d+)'),
+        'ASIN': re.compile(r'ASIN:\s*(\w+)'),
+        'TITLE': re.compile(r'title:\s*(.+)'),
+        'GROUP': re.compile(r'group:\s*(\w+)'),
+        'SALESRANK': re.compile(r'salesrank:\s*(\d+)'),
+        'SIMILAR': re.compile(r'similar:\s*(\d+)\s*(.+)'),
+        'CATEGORY': re.compile(r'(.+)\[(\d+)\]'),  # Categoria[ID]
+        'REVIEWS': re.compile(r'reviews:\s*total:\s*(\d+)\s*downloaded:\s*(\d+)\s*avg rating:\s*(\d+\.\d+)'),
+        'COMMENT': re.compile(r'(\d{4}-\d{1,2}-\d{1,2})\s+cutomer:\s+(\w+)\s+rating:\s+(\d+)\s+votes:\s+(\d+)\s+helpful:\s+(\d+)')
+    }
+
+    current_product = None
+    products = []
+    current_category = None  # Para armazenar a categoria principal temporariamente
+
+    with open(input_file, 'r') as file:
         for line in file:
             stripped_line = line.strip()
 
-            # Verifica se o produto foi descontinuado (CABOU)
+            # Ignora produto descontinuado
             if 'discontinued product' in stripped_line:
-                print(f"Produto descontinuado encontrado. Ignorando produto.")
-                current_product = None  # Reseta o produto atual
-                current_section = None  # Reseta a seção
-                continue  # Pula para a próxima linha
-
-            if len(stripped_line) == 0:  # Se for uma linha em branco
-                current_section = None
+                # print("Produto descontinuado encontrado. Ignorando produto.")
+                current_product = None
+                current_category = None
                 continue
 
-            for key in file_identifiers:
-                if key in stripped_line:
-                    current_section = file_identifiers[key]
+            # Verifica por ID
+            match_id = patterns['ID'].search(stripped_line)
+            if match_id:
+                if current_product:
+                    products.append(current_product)
+                current_product = Produto()
+                current_category = None  # Reseta a categoria atual ao encontrar um novo produto
+                current_product.set_id(int(match_id.group(1)))
+                # print(f"ID encontrado: {match_id.group(1)}")
+                continue
 
-                    # Quando encontrar um novo ID, cria um novo produto
-                    if current_section == 'ID':
-                        if current_product:
-                            products.append(current_product)  # Armazena o produto anterior
-                        current_product = Produto()  # Cria um novo produto
-                        current_product.set_id(int(stripped_line.split(':')[1].strip()))
+            # Verifica por ASIN
+            match_asin = patterns['ASIN'].search(stripped_line)
+            if match_asin:
+                current_product.set_asin(match_asin.group(1))
+                # print(f"ASIN encontrado: {match_asin.group(1)}")
+                continue
 
-                    # Atribui os outros identificadores
-                    elif current_section == 'ASIN':
-                        current_product.set_asin(stripped_line.split(':')[1].strip())
-                    elif current_section == 'TITLE':
-                        current_product.set_title(stripped_line.split(':')[1].strip())
-                    elif current_section == 'GROUP':
-                        current_product.set_group(stripped_line.split(':')[1].strip())
-                    elif current_section == 'SALESRANK':
-                        current_product.set_salesrank(int(stripped_line.split(':')[1].strip()))
+            # Verifica por TITLE
+            match_title = patterns['TITLE'].search(stripped_line)
+            if match_title:
+                current_product.set_title(match_title.group(1))
+                # print(f"Title encontrado: {match_title.group(1)}")
+                continue
 
-                    print(f"Identificador encontrado: {current_section}")
-                    break
+            # Verifica por GROUP
+            match_group = patterns['GROUP'].search(stripped_line)
+            if match_group:
+                current_product.set_group(match_group.group(1))
+                # print(f"Group encontrado: {match_group.group(1)}")
+                continue
 
-            # Processa conteúdo baseado no identificador atual
-            if current_section == 'REVIEWS':
-                # Exemplo: Pega total de reviews e rating médio
-                parts = stripped_line.split()
-                if current_product.total_review == 0:
-                    current_product.set_total_review(int(parts[2]))  
-                    current_product.set_averageRating_review(float(parts[7]))
-                print(f"Processando REVIEW: {parts}")
-            elif current_section == 'SIMILAR':
-                # Adiciona similares à lista
-                similar_items = stripped_line.split()[2:]  # Pega os similares a partir do índice 2
+            # Verifica por SALESRANK
+            match_salesrank = patterns['SALESRANK'].search(stripped_line)
+            if match_salesrank:
+                current_product.set_salesrank(int(match_salesrank.group(1)))
+                # print(f"Salesrank encontrado: {match_salesrank.group(1)}")
+                continue
+
+            # Verifica por SIMILAR
+            match_similar = patterns['SIMILAR'].search(stripped_line)
+            if match_similar:
+                similar_items = match_similar.group(2).split()
                 for item in similar_items:
                     current_product.add_similar(item)
-                print(f"Processando SIMILAR: {similar_items}")
-            elif current_section == 'CATEGORIES':
-                # Processa categorias separadas por '|'
-                categories = stripped_line.split('|')[1:]  # Pega as categorias e subcategorias
-                for category in categories:
-                    parts = category.split('[')
-                    category_name = parts[0].strip()
-                    category_id = int(parts[1].strip(']'))
+                # print(f"Similar encontrado: {similar_items}")
+                continue
 
-                    # Verifica se já existe uma instância de Category com esse nome
-                    existing_category = next((cat for cat in current_product.categories if cat.category_name == category_name), None)
-                    if not existing_category:
-                        new_category = Category()
-                        new_category.set_category_name(category_name)
-                        new_category.set_category_id(category_id)
-                        current_product.add_category(new_category)
-                        print(f"Categoria adicionada: {category_name}")
-                    else:
-                        print(f"Categoria duplicada ignorada: {category_name}")
+            # Verifica por CATEGORIES e SUBCATEGORIES
+            if '|' in stripped_line:
+                categories = stripped_line.split('|')[1:]  # Remove o primeiro elemento
+                for index, category_str in enumerate(categories):
+                    match_category = patterns['CATEGORY'].search(category_str)
+                    if match_category:
+                        category_name = match_category.group(1).strip()
+                        category_id = int(match_category.group(2))
 
-                    # Processando subcategorias
-                    if len(parts) > 2:  # Caso existam subcategorias
-                        subcategory_name = parts[2].strip()
-                        subcategory_id = int(parts[3].strip(']'))
+                        if index == 0:  # Primeiro item é a categoria principal
+                            new_category = Category()
+                            new_category.set_category_name(category_name)
+                            new_category.set_category_id(category_id)
+                            current_product.add_category(new_category)
+                            current_category = new_category  # Define como a categoria atual
+                            # print(f"Categoria adicionada: {category_name}")
+                        else:  # Os itens subsequentes são subcategorias
+                            if current_category is not None:  # Verifica se existe uma categoria principal
+                                new_subcategory = Subcategory()
+                                new_subcategory.set_subcategory_name(category_name)
+                                new_subcategory.set_subcategory_id(category_id)
+                                new_subcategory.set_category_id_associated(current_category.category_id)
+                                current_category.add_subcategory(new_subcategory)
+                                # print(f"Subcategoria adicionada: {category_name} à categoria {current_category.category_name}")
+                            # else:
+                            #     print(f"Erro: Tentando adicionar subcategoria '{category_name}', mas não há categoria principal.")
+                        continue
 
-                        new_subcategory = Subcategory()
-                        new_subcategory.set_subcategory_name(subcategory_name)
-                        new_subcategory.set_subcategory_id(subcategory_id)
-                        new_subcategory.set_category_id_associated(category_id)
+            # Verifica por REVIEWS
+            match_reviews = patterns['REVIEWS'].search(stripped_line)
+            if match_reviews:
+                total_reviews = int(match_reviews.group(1))
+                downloaded_reviews = int(match_reviews.group(2))
+                average_rating = float(match_reviews.group(3))
+                current_product.set_total_review(total_reviews)
+                current_product.set_average_rating(average_rating)
+                # print(f"Reviews: Total - {total_reviews}, Média - {average_rating}")
+                continue
+            
+            # Verifica por Comentários dentro das Reviews
+            match_comment = patterns['COMMENT'].search(stripped_line)
+            if match_comment:
+                date_comment = match_comment.group(1)
+                customer_id = match_comment.group(2)
+                rating_comment = int(match_comment.group(3))
+                votes_comment = int(match_comment.group(4))
+                helpful_comment = int(match_comment.group(5))
 
-                        existing_category.add_subcategory(new_subcategory)
-                        print(f"Subcategoria adicionada: {subcategory_name}")
+                # Cria uma nova instância de Comment
+                new_comment = Comment()
+                new_comment.set_date_comment(date_comment)
+                new_comment.set_customer_id(customer_id)
+                new_comment.set_rating_comment(rating_comment)
+                new_comment.set_votes_comment(votes_comment)
+                new_comment.set_helpful_comment(helpful_comment)
 
-            # Continua processando até encontrar uma linha em branco ou outro identificador
-            if current_section and not any(k in stripped_line for k in file_identifiers):
-                if current_section == 'REVIEWS':
-                    # Criando e preenchendo uma instância de Comment
-                    comment_parts = stripped_line.split()
-                    new_comment = Comment()
-                    new_comment.set_date_comment(comment_parts[0])
-                    new_comment.set_customer_id(comment_parts[2])
-                    new_comment.set_rating_comment(int(comment_parts[4]))
-                    new_comment.set_votes_comment(int(comment_parts[6]))
-                    new_comment.set_helpful_comment(int(comment_parts[8]))
-                    
-                    # Adiciona o comentário ao produto atual
-                    current_product.add_comment(new_comment)
-                    print(f"Comentário adicionado: {new_comment}")
+                # Adiciona o comentário ao produto atual
+                current_product.add_comment(new_comment)
+                # print(f"Comentário adicionado: {new_comment}")
+                continue
 
-                print(f"Conteúdo da seção {current_section}: {stripped_line}")
-
-    # Certifique-se de adicionar o último produto processado
-    if current_product:
-        products.append(current_product)
+        # Adiciona o último produto ao array
+        if current_product:
+            products.append(current_product)
 
     return products
 
-# Teste da função
-produtos = file_transcribe("teste.txt")
 
-# Imprime o estado de cada produto após processamento
-for produto in produtos:
-    print(produto)
+
+# Função para criar as tabelas no banco de dados
+def create_tables(conn):
+    with conn.cursor() as cur:
+        # Criação da tabela Produto
+        cur.execute('''
+        CREATE TABLE IF NOT EXISTS Produto (
+            asin VARCHAR(120) PRIMARY KEY,
+            title TEXT,
+            "group" TEXT,
+            salesrank INTEGER,
+            review INTEGER,
+            media_avaliacao FLOAT
+        );
+        ''')
+
+        # Criação da tabela Categoria
+        cur.execute('''
+        CREATE TABLE IF NOT EXISTS Categoria (
+            category_id INTEGER PRIMARY KEY,
+            category_name TEXT UNIQUE
+        );
+        ''')
+
+        # Criação da tabela Subcategoria
+        cur.execute('''
+        CREATE TABLE IF NOT EXISTS Subcategoria (
+            subcategory_id INTEGER PRIMARY KEY,
+            subcategory_name TEXT,
+            category_associated_id INTEGER REFERENCES Categoria(category_id),
+            UNIQUE(subcategory_name, category_associated_id)
+        );
+        ''')
+
+        # Criação da tabela Comentario
+        cur.execute('''
+        CREATE TABLE IF NOT EXISTS Comentario (
+            id SERIAL PRIMARY KEY,
+            date_comment DATE,
+            customer_id VARCHAR(120),
+            rating_comment INTEGER,
+            votes_comment INTEGER,
+            helpful_comment INTEGER,
+            id_asin VARCHAR(120) REFERENCES Produto(asin)
+        );
+        ''')
+
+        # Criação da tabela Similar_book_by_origin (Produtos Similares)
+        cur.execute('''
+        CREATE TABLE IF NOT EXISTS Similar_book_by_origin (
+            origin_asin VARCHAR(120) REFERENCES Produto(asin),
+            asin_similar_book VARCHAR(120) NOT NULL,
+            PRIMARY KEY (origin_asin, asin_similar_book)
+        );
+        ''')
+
+        # Criação da tabela categories_book_by_origin (Associação de Categorias com Produtos)
+        cur.execute('''
+        CREATE TABLE IF NOT EXISTS categories_book_by_origin (
+            origin_asin VARCHAR(120) REFERENCES Produto(asin),
+            category_associated INTEGER REFERENCES Categoria(category_id),
+            PRIMARY KEY (origin_asin, category_associated)
+        );
+        ''')
+
+        # Comitando as alterações
+        conn.commit()
+
+def insert_data_batch(conn, products, batch_size=1000):
+    with conn.cursor() as cur:
+        # Batch para os produtos
+        product_data = []
+        category_data = []
+        subcategory_data = []
+        similar_data = []
+        comment_data = []
+        categories_book_data = []
+
+        for product in products:
+            salesrank = product.salesrank if isinstance(product.salesrank, int) else None
+            product_data.append((product.asin, product.title, product.group, salesrank, product.total_review, product.average_rating))
+            
+            for category in product.categories:
+                category_data.append((category.category_id, category.category_name))
+                categories_book_data.append((product.asin, category.category_id))
+
+                for subcategory in category.subcategories:
+                    subcategory_data.append((subcategory.subcategory_id, subcategory.subcategory_name, category.category_id))
+                    
+            for similar_asin in product.similar:
+                similar_data.append((product.asin, similar_asin))
+
+            for comment in product.comments:
+                comment_data.append((comment.date_comment, comment.customer_id, comment.rating_comment, comment.votes_comment, comment.helpful_comment, product.asin))
+        
+        # Realiza a inserção por batch size
+        for i in range(0, len(product_data), batch_size):
+            cur.executemany('''
+                INSERT INTO Produto (asin, title, "group", salesrank, review, media_avaliacao)
+                VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING;
+            ''', product_data[i:i+batch_size])
+
+        for i in range(0, len(category_data), batch_size):
+            cur.executemany('''
+                INSERT INTO Categoria (category_id, category_name)
+                VALUES (%s, %s) ON CONFLICT (category_id) DO NOTHING;
+            ''', category_data[i:i+batch_size])
+
+        for i in range(0, len(subcategory_data), batch_size):
+            cur.executemany('''
+                INSERT INTO Subcategoria (subcategory_id, subcategory_name, category_associated_id)
+                VALUES (%s, %s, %s) ON CONFLICT (subcategory_id) DO NOTHING;
+            ''', subcategory_data[i:i+batch_size])
+
+        for i in range(0, len(similar_data), batch_size):
+            cur.executemany('''
+                INSERT INTO Similar_book_by_origin (origin_asin, asin_similar_book)
+                VALUES (%s, %s) ON CONFLICT DO NOTHING;
+            ''', similar_data[i:i+batch_size])
+
+        for i in range(0, len(comment_data), batch_size):
+            cur.executemany('''
+                INSERT INTO Comentario (date_comment, customer_id, rating_comment, votes_comment, helpful_comment, id_asin)
+                VALUES (%s, %s, %s, %s, %s, %s);
+            ''', comment_data[i:i+batch_size])
+
+        for i in range(0, len(categories_book_data), batch_size):
+            cur.executemany('''
+                INSERT INTO categories_book_by_origin (origin_asin, category_associated)
+                VALUES (%s, %s) ON CONFLICT DO NOTHING;
+            ''', categories_book_data[i:i+batch_size])
+
+        # Comitando as alterações
+        conn.commit()
+
+
+# Função para excluir todas as tabelas
+def drop_tables(conn):
+    with conn.cursor() as cur:
+        cur.execute('''
+        DROP TABLE IF EXISTS Comentario, Subcategoria, Categoria, 
+                            Similar_book_by_origin, categories_book_by_origin, Produto CASCADE;
+        ''')
+        conn.commit()
+
+# Função principal para executar o código
+def main():
+    # Conectando ao banco de dados e executando as operações
+    try:
+        # Conexão com o banco de dados
+        conn = psycopg2.connect(
+            dbname="postgres",
+            user="postgres",
+            password="1234",
+            host="localhost",  # ou o host do banco de dados
+            port="5432"
+        )
+
+        # Excluir as tabelas
+        drop_tables(conn)
+
+        # Cria as tabelas (caso ainda não existam)
+        create_tables(conn)
+
+        # Insere os dados dos produtos processados
+        start_time = time.time()
+        
+        produtos = file_transcribe_with_regex("amazon-meta.txt")
+        print("\n================== Inserindo Dados, Aguarde! ==================\n")
+        insert_data(conn, produtos)
+
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+        print("\n\n================== Dados Inseridos com Sucesso! ==================\n\n")
+        print(f"Tempo total para inserção de dados: {elapsed_time:.2f} segundos.")
+
+        
+    finally:
+        conn.close()
+
+if __name__ == "__main__":
+    main()
+
