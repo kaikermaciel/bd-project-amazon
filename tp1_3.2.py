@@ -1,3 +1,4 @@
+
 import time
 import psycopg2
 import re
@@ -359,73 +360,76 @@ def create_tables(conn):
         # Comitando as alterações
         conn.commit()
 
-def insert_data_batch(conn, products, batch_size=1000):
+# Função para inserir os produtos e categorias no banco de dados
+def insert_data(conn, products):
     with conn.cursor() as cur:
-        # Batch para os produtos
-        product_data = []
-        category_data = []
-        subcategory_data = []
-        similar_data = []
-        comment_data = []
-        categories_book_data = []
-
         for product in products:
+            # Verifica se o salesrank é válido (inteiro), caso contrário insere NULL
             salesrank = product.salesrank if isinstance(product.salesrank, int) else None
-            product_data.append((product.asin, product.title, product.group, salesrank, product.total_review, product.average_rating))
             
+            # Insere o produto
+            cur.execute('''
+            INSERT INTO Produto (asin, title, "group", salesrank, review, media_avaliacao)
+            VALUES (%s, %s, %s, %s, %s, %s) RETURNING asin;
+            ''', (product.asin, product.title, product.group, salesrank, product.total_review, product.average_rating))
+
+            produto_asin = cur.fetchone()[0]
+            
+            # Insere categorias e subcategorias e associa com o produto
             for category in product.categories:
-                category_data.append((category.category_id, category.category_name))
-                categories_book_data.append((product.asin, category.category_id))
-
-                for subcategory in category.subcategories:
-                    subcategory_data.append((subcategory.subcategory_id, subcategory.subcategory_name, category.category_id))
-                    
-            for similar_asin in product.similar:
-                similar_data.append((product.asin, similar_asin))
-
-            for comment in product.comments:
-                comment_data.append((comment.date_comment, comment.customer_id, comment.rating_comment, comment.votes_comment, comment.helpful_comment, product.asin))
-        
-        # Realiza a inserção por batch size
-        for i in range(0, len(product_data), batch_size):
-            cur.executemany('''
-                INSERT INTO Produto (asin, title, "group", salesrank, review, media_avaliacao)
-                VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING;
-            ''', product_data[i:i+batch_size])
-
-        for i in range(0, len(category_data), batch_size):
-            cur.executemany('''
+                # Insere a categoria, garantindo que não haja duplicatas
+                cur.execute('''
                 INSERT INTO Categoria (category_id, category_name)
-                VALUES (%s, %s) ON CONFLICT (category_id) DO NOTHING;
-            ''', category_data[i:i+batch_size])
+                VALUES (%s, %s) ON CONFLICT (category_name) DO NOTHING RETURNING category_id;
+                ''', (category.category_id, category.category_name))
+                category_id = cur.fetchone()
+                
+                if category_id is None:
+                    cur.execute('SELECT category_id FROM Categoria WHERE category_name = %s;', (category.category_name,))
+                    category_id = cur.fetchone()[0]
+                else:
+                    category_id = category_id[0]
 
-        for i in range(0, len(subcategory_data), batch_size):
-            cur.executemany('''
-                INSERT INTO Subcategoria (subcategory_id, subcategory_name, category_associated_id)
-                VALUES (%s, %s, %s) ON CONFLICT (subcategory_id) DO NOTHING;
-            ''', subcategory_data[i:i+batch_size])
-
-        for i in range(0, len(similar_data), batch_size):
-            cur.executemany('''
-                INSERT INTO Similar_book_by_origin (origin_asin, asin_similar_book)
-                VALUES (%s, %s) ON CONFLICT DO NOTHING;
-            ''', similar_data[i:i+batch_size])
-
-        for i in range(0, len(comment_data), batch_size):
-            cur.executemany('''
-                INSERT INTO Comentario (date_comment, customer_id, rating_comment, votes_comment, helpful_comment, id_asin)
-                VALUES (%s, %s, %s, %s, %s, %s);
-            ''', comment_data[i:i+batch_size])
-
-        for i in range(0, len(categories_book_data), batch_size):
-            cur.executemany('''
+                # Insere na tabela categories_book_by_origin
+                cur.execute('''
                 INSERT INTO categories_book_by_origin (origin_asin, category_associated)
                 VALUES (%s, %s) ON CONFLICT DO NOTHING;
-            ''', categories_book_data[i:i+batch_size])
+                ''', (produto_asin, category_id))
 
-        # Comitando as alterações
+                # Insere subcategorias e associa com a categoria
+                for subcategory in category.subcategories:
+                    # Verifica se a subcategoria já existe para essa categoria associada
+                    cur.execute('''
+                    SELECT subcategory_id FROM Subcategoria
+                    WHERE subcategory_name = %s AND category_associated_id = %s;
+                    ''', (subcategory.subcategory_name, category_id))
+                    existing_subcategory = cur.fetchone()
+
+                    if not existing_subcategory:
+                        # Insere a subcategoria se ela não existir
+                        cur.execute('''
+                        INSERT INTO Subcategoria (subcategory_id, subcategory_name, category_associated_id)
+                        VALUES (%s, %s, %s) ON CONFLICT (subcategory_id) DO NOTHING RETURNING subcategory_id;
+                        ''', (subcategory.subcategory_id, subcategory.subcategory_name, category_id))
+
+                    subcategory_id = subcategory.subcategory_id  # Se ela já existir, usa o ID existente
+                            
+            # Insere produtos similares e associa com o produto
+            for similar_asin in product.similar:
+                # Insere na tabela Similar_book_by_origin
+                cur.execute('''
+                INSERT INTO Similar_book_by_origin (origin_asin, asin_similar_book)
+                VALUES (%s, %s) ON CONFLICT DO NOTHING;
+                ''', (produto_asin, similar_asin))
+            
+            # Insere comentários
+            for comment in product.comments:
+                cur.execute('''
+                INSERT INTO Comentario (date_comment, customer_id, rating_comment, votes_comment, helpful_comment, id_asin)
+                VALUES (%s, %s, %s, %s, %s, %s);
+                ''', (comment.date_comment, comment.customer_id, comment.rating_comment, comment.votes_comment, comment.helpful_comment, produto_asin))
+
         conn.commit()
-
 
 # Função para excluir todas as tabelas
 def drop_tables(conn):
@@ -458,7 +462,7 @@ def main():
         # Insere os dados dos produtos processados
         start_time = time.time()
         
-        produtos = file_transcribe_with_regex("amazon-meta.txt")
+        produtos = file_transcribe_with_regex("teste.txt")
         print("\n================== Inserindo Dados, Aguarde! ==================\n")
         insert_data(conn, produtos)
 
@@ -473,4 +477,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
